@@ -1,0 +1,394 @@
+---
+title: "¿Cómo se distribuyen los precios de la vivienda en la Montevideo?"
+author: | 
+  | Pablo Picardo
+date: ""
+output:
+  html_document:
+    theme: united
+    highlight: tango
+bibliography: biblio.bib
+link-citations: yes
+bst: elsarticle-harv.bst
+nocite: | 
+  @R, @rstudio
+---
+
+![Foto tomada por Pablo Picardo](montevideo.jpg){width=17cm}
+
+
+# Intro{.tabset .tabset-fade .tabset-pills}
+
+Este post presenta datos sobre el mercado inmobiliario montevideano, específicamente sobre la distribución de precios de las de las **ofertas** publicadas en el sitio [mercadolibre.com.uy](https://www.mercadolibre.com.uy/){target="_blank"}. Las visualizaciones fueron hechas básicamente los paquetes ggplot2, Leaflet y plotly.
+
+## Aclaraciones de los datos 
+
+Los datos forman parte de mi tesis de Maestría en Economía (FCEA - UdelaR) sobre predicción de precios de la vivienda y del documento de trabajo del Banco Central del Uruguay al que puede **[acceder aquí](https://www.bcu.gub.uy/Estadisticas-e-Indicadores/Documentos%20de%20Trabajo/02.2019.pdf){target="_blank"}**. Mis tutores fueron [Fernando Borraz](https://exportcvuy.anii.org.uy/CvEstatico/?urlId=05732170fe5fe67825ac717cd71b0b268cfb68c3dce1e61287f1afe4b7ee2b64fdf0a497a8357d6226c9aab443a2046d0100e43f10b72379b64951ed5eb8d586&formato=pdf&convocatoria=21){target="_blank"} (BCU) y [Natalia da Silva](https://exportcvuy.anii.org.uy/CvEstatico/?urlId=920277b8728c07251a3b8fbd984e40c16ee9e023542c4531f055f8792edb0d377cf99b05d4e324271a9779613cc0392d2a3ab4a048e4e52ed938161061abc5de&formato=pdf&convocatoria=21){target="_blank"} (IESTA).
+
+Para la recopilación de datos web se utilizó un programa que accede a la [API](https://developers.mercadolibre.com.uy/){target="_blank"} del sitio, para ello conté con la excepcional ayuda de [Bruno García](https://www.linkedin.com/in/brunogarciauy/){target="_blank"}. Para el manejo de datos con el software R, conté con el invaluable apoyo de [Joselina Davyt](https://www.linkedin.com/in/joselina-davyt-7326b142/?originalSubdomain=uy){target="_blank"}. Los datos de ofertas han sido puestos a disposición en  [**Kaggle**](https://www.kaggle.com/ppicardo/real-estate-offers-in-montevideo-uruguay){target="_blank"}.
+
+**Los errores son de mi exclusiva responsabilidad.**
+
+## Código
+
+El código y texto de este post de fue realizado con Rstudio Version 1.2.5042 y R 3.6.3. Para reproducirlo queda disponible aquí. Este código es simple y fácilmente mejorable, te invito a hacerlo mejor en un kernel en [**Kaggle**](https://www.kaggle.com/ppicardo/real-estate-offers-in-montevideo-uruguay){target="_blank"}.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+ # opciones para los chunks
+
+setwd("C:/Users/Usuario/Desktop/PP/Tesis/unaimagen/precios") # fijo directorio de trabajo
+
+# libraries
+library("tidyverse") 
+library("plotly")
+library("viridis")
+library("lubridate")
+library("zoo")
+library("leaflet")
+library("rpart")
+library("rpart.plot")
+library("tree")
+
+
+options(scipen = 9999) # opción para el formato de los decimales
+```
+
+# Datos {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+#cargamos datos de las ofertas
+load("meli_limpio_2.Rdata")
+
+
+```
+
+Luego de una limpieza preliminar de los datos tenemos  690.000 observaciones que refieren a aproximadamente 160.000 publicaciones únicas de casas y apartamentos de Montevideo, distribuidas a lo largo del período febrero 2018 - diciembre 2019.
+
+
+## Publicaciones en el tiempo
+
+Al comenzar el proyecto, en 2018 habían poco más de 20.000 publicaciones que fueron aumentando a lo largo del tiempo hasta llegar a poco menos de 40.000. ¿Se trata de un aumento del canal de ofertas online, o aumento de ofertas en general?
+
+
+```{r message=FALSE, warning=FALSE, , echo=FALSE}
+summary <- meli %>%
+  group_by(bajada) %>%
+  dplyr::summarise(cantidad_obs = n())
+
+ggplotly(summary %>%
+  ggplot( aes(x=bajada, y=cantidad_obs)) +
+    geom_line( color="grey") +
+    geom_point(shape=21, color="black", fill="#69b3a2", size=3) + ylim(0,45000)+ 
+    geom_smooth(se = FALSE,  method = "lm", formula = y ~ poly(x, 4), color="blue", alpha=0.1, size=0.5) +
+     ylab("Cantidad de observaciones") + xlab("Mes-Año")+ theme_bw() 
+)
+
+```
+
+## Tiempo en el mercado
+
+El tiempo en el mercado se refiere al tiempo en que la publicación está activa en el sitio. Que deje de estar activa no significa necesariamente que se haya vendido (simplemente se dió de baja la publicación o venció su plazo).De todas formas puede ser un indicador interesante de ver. La mediana del indicador simple de tiempo en el mercado es 130 días (poco más de 4 meses).
+
+
+```{r , echo=FALSE}
+##### tom
+# time on the market, cálculo
+meli$tom <- difftime(meli$start_time_new, meli$bajada_new , units = "days")
+meli$tom[meli$tom>0] <- 0
+meli$tom <- round(as.numeric(meli$tom))
+
+ggplotly(
+tom_plot <- ggplot(meli, aes(tom, fill = tipo_inmueble)) +
+  geom_histogram(aes(y=(..count../sum(..count..))), binwidth = 30) +
+  labs(x='Días en el mercado', y="Ratio de observaciones") + scale_x_continuous(limits = c(-600, 0)) + scale_fill_viridis_d()+ theme(text = element_text(size=16)) + geom_vline(xintercept=median(meli$tom, na.rm = T), linetype="dashed", color = "red", size=0.5)+ theme_bw() 
+)
+
+```
+
+
+## Distribución de los precios ofertados {.tabset .tabset-fade .tabset-pills}
+
+Tomamos solo publicaciones de **abril de 2019** y que hayan estado publicadas como máximo 300 días.
+
+### Precio total
+
+Restringimos a observaciones con precio menor o igual a USD 1.000.000.
+
+```{r , echo=FALSE}
+meli_abril <- meli[meli$bajada=="2019-04",]
+meli_abril <- meli_abril[meli_abril$tom>(-300),]
+
+plot_3 <- ggplot(meli_abril[meli_abril$precio<=1000000,], aes(x=tipo_inmueble, y=precio, fill=tipo_inmueble)) +
+  geom_boxplot()+ scale_fill_viridis_d() +
+  theme(legend.position = "none")+  labs(y="Precio", x="") + theme(text = element_text(size=16))+ theme_bw() 
+
+ggplotly(plot_3)
+
+```
+
+Hecho estilizado, las casas son más caras que los apartamentos y tienen una variabilidad mayor si consideramos el rango inter-cuartílico. En el caso de los apartamentos, tienen una cola larga de distribución. Los precios son significativamente más altos de los que se observan en las transacciones. 
+
+
+Nota: **luego de abril de 2019, algunas variables no pudieron ser descargadas del sitio, por ejemplo la latitud y longitud de las publicaciones. Si alguien se anima, puede agarrar los datos indicados en la dirección y tratar de generar las coordenadas: hacer geocoding**.
+
+### Precio por metro cuadrado
+
+Restringimos a observaciones con precio del metro cuadrado menor o igual a USD 10.000.
+
+```{r , echo=FALSE}
+
+plot_4 <- ggplot(meli_abril[meli_abril$preciom2<=10000,], aes(x=tipo_inmueble, y=preciom2, fill=tipo_inmueble)) +
+  geom_boxplot()+ scale_fill_viridis_d() +
+  theme(legend.position = "none")+  labs(y="Precio del metro cuadrado", x="") + theme(text = element_text(size=16))+ theme_bw() 
+
+ggplotly(plot_4)
+
+```
+
+Si consideramos el precio por metro cuadrado, los apartamentos son más caros (en media y mediana) que las casas. 
+
+### Por barrios
+
+Seleccionamos algunos barrios. Las diferencias entre barrios son relevantes, principalmente para apartamentos.
+
+```{r , fig.width = 9, echo=FALSE}
+
+# seleccionamos algunos barrios (los que tienen más observaciones)
+meli_subset_barrio <- subset(meli_abril, barrio=="Pocitos" | barrio=="Cordón"| barrio=="Centro"| barrio=="Malvin" | barrio=="Carrasco" | barrio== "Punta Carretas"| barrio== "La Blanqueada"| barrio== "Parque Batlle"| barrio== "Tres Cruces"| barrio== "Prado"| barrio== "Buceo"| barrio== "Parque Rodó"| barrio== "Aguada"| barrio== "Palermo"| barrio== "Unión"| barrio== "Punta Gorda"| barrio== "BrazO-Atahualpa"| barrio== "Ciudad Vieja"| barrio== "Colón"| barrio== "Malvin Norte"| barrio== "Puerto Buceo"| barrio=="Jacinto Vera"| barrio=="Villa Biarritz"| barrio== "Cerrito"| barrio=="Reducto"| barrio=="Sayago-Peñarol"|  barrio=="Cerro-LaTeja" | barrio=="PasoM-Belvedere" | barrio== "Piedras Blancas" )
+
+
+plot_5 <- ggplot(meli_subset_barrio[meli_subset_barrio$preciom2<=9500,], aes(x = reorder(barrio, preciom2, FUN = mean), y = preciom2)) + 
+  geom_boxplot(aes(fill = tipo_inmueble), width = 0.9, size=0.7) + scale_fill_viridis_d()  + theme_bw()+
+  theme(text = element_text(size=12), axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks= seq(0, 9000, by=1000)) + 
+  labs(x='', y="") + facet_grid(.~tipo_inmueble) + theme(legend.position = "none")
+
+
+
+ggplotly(plot_5 )
+
+```
+
+
+## Mapas{.tabset .tabset-fade .tabset-pills}
+
+### Ubicación de apartamentos y casas
+
+```{r , echo=FALSE}
+
+# creo un objeto que asigna color por factor
+qpal <- colorFactor(c("dodgerblue1", "red"), domain = c("Apartamentos", "Casas"))
+
+# crear mapa 
+meli_map <- leaflet(meli_abril)%>%
+    setView(lng = -56.163, lat = -34.896, zoom = 12)  %>%  
+  addTiles() %>% 
+  addMiniMap() %>%
+  addCircleMarkers(radius = 1.6, stroke = FALSE, color=~qpal(tipo_inmueble), fillOpacity = 0.4) %>%
+  addLegend("bottomright", pal = qpal, values = ~tipo_inmueble,title = "Tipo de propiedad")
+
+# visualización
+meli_map
+
+```
+
+### Distribución del precio en el mapa{.tabset .tabset-fade .tabset-pills}
+
+Veamos dónde se ubican las propiedades más caras y más baratas en el mapa, según tipo de propiedad y considerando el precio del metro cuadrado. Para la visualización separamos en quintiles. Los colores rojos más intensos refieren a los precios más altos.
+
+#### Apartamentos
+
+```{r , echo=FALSE}
+
+aptos <- meli_abril[meli_abril$tipo_inmueble=="Apartamentos",]
+
+qpal <- colorQuantile("YlOrRd",domain = aptos$preciom2, n = 5)
+
+leaflet(aptos) %>% 
+  addTiles()%>%
+  setView(lng = -56.163, lat = -34.896, zoom = 12) %>%
+  addTiles() %>% 
+  addCircleMarkers(radius = 1.5, stroke = FALSE, color=~qpal(preciom2), fillOpacity = 0.8,weight=0.5) %>% 
+  addLegend("bottomright", pal = qpal, values = ~preciom2,
+            title = "Quintil precio m2")
+
+
+
+```
+
+
+Nota 1: **Al considerar metro cuadrado podemos perder muchas observaciones ya que la superficie construida indicada en el sitio puede ser errónea o incoherente.**
+
+#### Casas
+
+```{r , echo=FALSE}
+
+casas <- meli_abril[meli_abril$tipo_inmueble=="Casas",]
+
+qpal <- colorQuantile("YlOrRd",domain = casas$preciom2, n = 5)
+
+leaflet(casas) %>% 
+  addTiles()%>%
+  setView(lng = -56.163, lat = -34.896, zoom = 12) %>%
+  addTiles() %>% 
+  addCircleMarkers(radius = 1.5, stroke = FALSE, color=~qpal(preciom2), fillOpacity = 0.8 ,weight=0.5) %>% 
+  addLegend("bottomright", pal = qpal, values = ~preciom2,
+            title = "Quintil precio m2")
+
+```
+
+
+## Partición con CART {.tabset .tabset-fade .tabset-pills}
+
+Considerando el precio del metro cuadrado observamos el hecho estilizado de que las propidades de mayor valor se encuentran en la costa este. Hay algunas excepciones como la zona del Prado y la zona de Carrasco Norte/Paso Carrasco. La pregunta que surge es si es posible estable establecer zonas con variables de ubicación (coordenadas) que agrupen precios similares. Esto es interesante para ver las divisiones que pueden existir en la ciudad.
+
+Lo que se presenta es un ejemplo de árbol de regresión y clasificación (CART por sus siglas en inglés), un método de aprendizaje estadístico introducido por @breiman84. El principio general de este método es particionar recursivamente el espacio de variables explicativas  $X_i$ de forma binaria y así determinar sub-particiones óptimas para la predicción de una variable objetivo. Este método tiene la virtud de ser de fácil interpretación, comunicación y transparente. 
+
+Presentamos el árbol para los apartamentos y restringimos a los que tienen un precio del metro cuadrado menor a USD 4000.
+
+```{r , echo=FALSE}
+
+
+# Fuente: https://stackoverflow.com/questions/37564301/plot-a-partitioned-2d-space-from-a-simple-regression-tree
+gg.partition.tree <- function (tree, label = "yval", ordvars, ...) 
+{
+    ptXlines <- function(x, v, xrange, xcoord = NULL, ycoord = NULL, 
+        tvar, i = 1L) {
+        if (v[i] == "<leaf>") {
+            y1 <- (xrange[1L] + xrange[3L])/2
+            y2 <- (xrange[2L] + xrange[4L])/2
+            return(list(xcoord = xcoord, ycoord = c(ycoord, y1, 
+                y2), i = i))
+        }
+        if (v[i] == tvar[1L]) {
+            xcoord <- c(xcoord, x[i], xrange[2L], x[i], xrange[4L])
+            xr <- xrange
+            xr[3L] <- x[i]
+            ll2 <- Recall(x, v, xr, xcoord, ycoord, tvar, i + 
+                1L)
+            xr <- xrange
+            xr[1L] <- x[i]
+            return(Recall(x, v, xr, ll2$xcoord, ll2$ycoord, tvar, 
+                ll2$i + 1L))
+        }
+        else if (v[i] == tvar[2L]) {
+            xcoord <- c(xcoord, xrange[1L], x[i], xrange[3L], 
+                x[i])
+            xr <- xrange
+            xr[4L] <- x[i]
+            ll2 <- Recall(x, v, xr, xcoord, ycoord, tvar, i + 
+                1L)
+            xr <- xrange
+            xr[2L] <- x[i]
+            return(Recall(x, v, xr, ll2$xcoord, ll2$ycoord, tvar, 
+                ll2$i + 1L))
+        }
+        else stop("wrong variable numbers in tree.")
+    }
+    if (inherits(tree, "singlenode")) 
+        stop("cannot plot singlenode tree")
+    if (!inherits(tree, "tree")) 
+        stop("not legitimate tree")
+    frame <- tree$frame
+    leaves <- frame$var == "<leaf>"
+    var <- unique(as.character(frame$var[!leaves]))
+    if (length(var) > 2L || length(var) < 1L) 
+        stop("tree can only have one or two predictors")
+    nlevels <- sapply(attr(tree, "xlevels"), length)
+    if (any(nlevels[var] > 0L)) 
+        stop("tree can only have continuous predictors")
+    x <- rep(NA, length(leaves))
+    x[!leaves] <- as.double(substring(frame$splits[!leaves, "cutleft"], 
+        2L, 100L))
+    m <- model.frame(tree)
+    if (length(var) == 1L) {
+        x <- sort(c(range(m[[var]]), x[!leaves]))
+        if (is.null(attr(tree, "ylevels"))) 
+            y <- frame$yval[leaves]
+        else y <- frame$yprob[, 1L]
+        y <- c(y, y[length(y)])
+        if (add) 
+            lines(x, y, type = "s", ...)
+        else {
+            a <- attributes(attr(m, "terms"))
+            yvar <- as.character(a$variables[1 + a$response])
+            xo <- m[[yvar]]
+            if (is.factor(xo)) 
+                ylim <- c(0, 1)
+            else ylim <- range(xo)
+            plot(x, y, ylab = yvar, xlab = var, type = "s", ylim = ylim, 
+                xaxs = "i", ...)
+        }
+        invisible(list(x = x, y = y))
+    }
+    else {
+        if (!missing(ordvars)) {
+            ind <- match(var, ordvars)
+            if (any(is.na(ind))) 
+                stop("unmatched names in vars")
+            var <- ordvars[sort(ind)]
+        }
+        lab <- frame$yval[leaves]
+        if (is.null(frame$yprob)) 
+            lab <- format(signif(lab, 3L))
+        else if (match(label, attr(tree, "ylevels"), nomatch = 0L)) 
+            lab <- format(signif(frame$yprob[leaves, label], 
+                3L))
+        rx <- range(m[[var[1L]]])
+        rx <- rx + c(-0.025, 0.025) * diff(rx)
+        rz <- range(m[[var[2L]]])
+        rz <- rz + c(-0.025, 0.025) * diff(rz)
+        xrange <- c(rx, rz)[c(1, 3, 2, 4)]
+        xcoord <- NULL
+        ycoord <- NULL
+        xy <- ptXlines(x, frame$var, xrange, xcoord, ycoord, 
+            var)
+        xx <- matrix(xy$xcoord, nrow = 4L)
+        yy <- matrix(xy$ycoord, nrow = 2L)
+        return(
+          list(
+            annotate(geom="segment", x=xx[1L, ], y=xx[2L, ], xend=xx[3L, ], yend=xx[4L, ]),
+            annotate(geom="text", x=yy[1L, ], y=yy[2L, ], label=as.character(lab), ...)
+          )
+        )
+    }
+}
+
+aptos$lat <- ifelse(aptos$lat>(-34.8), NA, aptos$lat) # saco los que están muy al norte
+aptos$long <- ifelse(aptos$long<(-56.28), NA, aptos$long) # saco los que están muy al oeste
+aptos$long <- ifelse(aptos$long>(-56), NA, aptos$long) # saco los que están muy al este
+
+
+set.seed(1761988)
+ggplot(aptos[aptos$preciom2<4000,]) + 
+  geom_point(aes(long, lat, color=preciom2), size=0.9, alpha=0.5) +  scale_color_gradient(low="yellow", high="red")+
+  gg.partition.tree(tree(preciom2 ~ lat + long, data=aptos[aptos$preciom2<4000,]), 
+                    label="Precio m2", color = "black") +
+    ggtitle("Particiones de coordenadas para el precio del m2") + ylab("Latitud") + xlab("Longitud")+ theme_bw() 
+
+
+```
+
+Este método nos particiona el mapa de la ciudad y nos define zonas agrupadas por el precio por metro cuadrado. Fácilmente se puede asociar los cortes con avenidas y zonas conocidas de la ciudad. Los montos indicados en las áreas del mapa refieren a una predicción del modelo CART para una observación dentro del área. Esta predicción es simplemente el promedio de los precios en esa área.
+
+Si el objetivo es predecir, notar que en la mayoría de los casos, CART tiene peor performance predictiva que un modelo lineal y una serie de falencias asociadas a la estabilidad de las predicciones (@genuer18). Esto se puede resolver en gran medida con la introducción del métodos agregativos como el de bosques aleatorios.  Este tema como otros pueden profundizarse en tres textos de referencia: @james2013, @friedman2001 y @genuer18 y a los artículos originales de Leo Breiman (@breiman84 y @breiman2001random).
+
+# Algunas ideas para seguir pensando
+
+- Como se esboza en mi Tesis de Maestría, es interesante ver las diferencias de precios entre transacciones y ofertas. Para realizar la comparación es importante controlar por características y sesgos de los inmuebles en las dos bases de datos. 
+- Análisis del comportamiento del precio de la vivienda con otras variables (precios de supermercado, crimen, etc.), considerando la dimensión territorial a un nivel de desagregación más preciso.
+- Realizar scraping de todos los sitios web en el mercado: por ejemplo Infocasas (relativamente sencillo) o El Gallito Luis (un poco más complicado).
+
+<br/>
+Si hay interés en trabajar en estos puntos, pueden contactarme para facilitarles algunos códigos y bibliografía al respecto.
+
+
+<br/><br/> 
+
+
